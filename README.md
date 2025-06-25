@@ -122,3 +122,7 @@ git add README.md
 git commit -m "Add initial project README with architecture and plan"
 git push
 這樣 Cursor 或任何協作者看到這份 repo 就能立刻明白你的開發意圖與目標。
+
+
+👉 模型檔請手動下載後放入 `assets/models/` 資料夾  
+範例：`ggml-base-q5_1.bin` 可由 [ggerganov/whisper.cpp](https://github.com/ggerganov/whisper.cpp#usage) 取得
