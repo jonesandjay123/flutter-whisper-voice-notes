@@ -52,12 +52,6 @@ class _WhisperTestPageState extends State<WhisperTestPage> {
         _transcriptionResult = '📋 模型資訊：\n• 預設模型：ggml-base-q5_1.bin\n• 位置：assets/models/\n• 格式：GGML\n• 語言：多語言支援\n\n⚠️ 注意：模型載入功能需要完整實作\n目前 JNI 連接測試正常！';
       });
       return;
-      
-      setState(() {
-        _transcriptionResult = result 
-          ? '✅ 模型載入成功！\n可以開始進行語音識別' 
-          : '❌ 模型載入失敗\n請檢查模型檔案';
-      });
     } on PlatformException catch (e) {
       setState(() {
         _transcriptionResult = '模型載入錯誤: ${e.message}';
