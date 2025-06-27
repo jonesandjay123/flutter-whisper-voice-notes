@@ -5,7 +5,38 @@ import 'package:record/record.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
+import 'dart:convert';
+
+// 轉錄記錄項目類
+class TranscriptionRecord {
+  String id;
+  String text;
+  DateTime timestamp;
+
+  TranscriptionRecord({
+    required this.id,
+    required this.text,
+    required this.timestamp,
+  });
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'text': text,
+      'timestamp': timestamp.toIso8601String(),
+    };
+  }
+
+  factory TranscriptionRecord.fromJson(Map<String, dynamic> json) {
+    return TranscriptionRecord(
+      id: json['id'],
+      text: json['text'],
+      timestamp: DateTime.parse(json['timestamp']),
+    );
+  }
+}
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -40,6 +71,10 @@ class _HomePageState extends State<HomePage> {
     'tiny': 'Tiny 模型 (31MB) - 更快速',
     'base': 'Base 模型 (57MB) - 更準確',
   };
+  
+  // 轉錄記錄清單相關變數
+  List<TranscriptionRecord> _transcriptionRecords = [];
+  static const String _recordsKey = 'transcription_records';
 
   @override
   void initState() {
@@ -57,7 +92,8 @@ class _HomePageState extends State<HomePage> {
   Future<void> _initializeApp() async {
     await _initializeRecording();
     await _getSystemInfo();
-    // 自動載入Tiny模型
+    await _loadTranscriptionRecords();
+    // 自動載入預設的Tiny模型
     await _loadModel();
   }
 
@@ -194,10 +230,13 @@ class _HomePageState extends State<HomePage> {
       setState(() {
         _isRecording = false;
         _hasRecording = true;
-        _transcriptionResult = '錄音完成，可以開始轉錄';
+        _transcriptionResult = '錄音完成，正在自動轉錄...';
       });
 
-      _showSuccessSnackBar('錄音完成！');
+      _showSuccessSnackBar('錄音完成！正在自動轉錄...');
+      
+      // 自動觸發轉錄
+      await _transcribeAudio();
     } catch (e) {
       _showErrorSnackBar('停止錄音失敗: $e');
     }
@@ -296,6 +335,11 @@ class _HomePageState extends State<HomePage> {
         _hasTranscription = true;
       });
 
+      // 自動添加轉錄結果到記錄清單
+      if (result.trim().isNotEmpty) {
+        await _addTranscriptionRecord(result.trim());
+      }
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('轉錄完成！耗時 ${elapsedSeconds}s'),
@@ -373,166 +417,250 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  // ============ 轉錄記錄清單相關函數 ============
+  
+  Future<void> _loadTranscriptionRecords() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String? recordsJson = prefs.getString(_recordsKey);
+      
+      if (recordsJson != null) {
+        final List<dynamic> recordsList = json.decode(recordsJson);
+        setState(() {
+          _transcriptionRecords = recordsList
+              .map((record) => TranscriptionRecord.fromJson(record))
+              .toList();
+        });
+      }
+    } catch (e) {
+      print('載入轉錄記錄失敗: $e');
+    }
+  }
+
+  Future<void> _saveTranscriptionRecords() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String recordsJson = json.encode(
+        _transcriptionRecords.map((record) => record.toJson()).toList(),
+      );
+      await prefs.setString(_recordsKey, recordsJson);
+    } catch (e) {
+      print('保存轉錄記錄失敗: $e');
+    }
+  }
+
+  Future<void> _addTranscriptionRecord(String text) async {
+    final newRecord = TranscriptionRecord(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      text: text,
+      timestamp: DateTime.now(),
+    );
+
+    setState(() {
+      _transcriptionRecords.insert(0, newRecord); // 新記錄放在最前面
+    });
+
+    await _saveTranscriptionRecords();
+    _showSuccessSnackBar('已添加到記錄清單');
+  }
+
+  Future<void> _editTranscriptionRecord(int index, String newText) async {
+    if (index >= 0 && index < _transcriptionRecords.length) {
+      setState(() {
+        _transcriptionRecords[index].text = newText;
+      });
+      await _saveTranscriptionRecords();
+      _showSuccessSnackBar('記錄已更新');
+    }
+  }
+
+  Future<void> _deleteTranscriptionRecord(int index) async {
+    if (index >= 0 && index < _transcriptionRecords.length) {
+      setState(() {
+        _transcriptionRecords.removeAt(index);
+      });
+      await _saveTranscriptionRecords();
+      _showSuccessSnackBar('記錄已刪除');
+    }
+  }
+
+  void _showEditDialog(int index) {
+    final TextEditingController controller = TextEditingController(
+      text: _transcriptionRecords[index].text,
+    );
+
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text('編輯記錄'),
+          content: TextField(
+            controller: controller,
+            maxLines: 3,
+            decoration: InputDecoration(
+              hintText: '請輸入文字...',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+              child: Text('取消'),
+            ),
+            TextButton(
+              onPressed: () {
+                if (controller.text.trim().isNotEmpty) {
+                  _editTranscriptionRecord(index, controller.text.trim());
+                }
+                Navigator.of(context).pop();
+              },
+              child: Text('保存'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showDeleteConfirmDialog(int index) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text('確認刪除'),
+          content: Text('確定要刪除這條記錄嗎？'),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+              child: Text('取消'),
+            ),
+            TextButton(
+              onPressed: () {
+                _deleteTranscriptionRecord(index);
+                Navigator.of(context).pop();
+              },
+              child: Text('刪除', style: TextStyle(color: Colors.red)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Whisper 語音筆記'),
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+        title: Row(
           children: [
-            // 應用標題區域
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [Colors.deepPurple.withOpacity(0.1), Colors.blue.withOpacity(0.1)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.mic,
-                    size: 48,
-                    color: Colors.deepPurple,
-                  ),
-                  SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Whisper 語音筆記',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        Text(
-                          '語音轉文字，即時處理',
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: Colors.grey[600],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
+            Icon(
+              Icons.mic,
+              color: Colors.deepPurple,
+              size: 28,
             ),
-            
-            SizedBox(height: 16),
-            
-            // 模型選擇區域
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '選擇 Whisper 模型',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                    ),
-                    SizedBox(height: 12),
-                    Row(
-                      children: _modelOptions.entries.map((entry) {
-                        return Expanded(
-                          child: Padding(
-                            padding: EdgeInsets.only(right: entry.key == 'tiny' ? 8 : 0),
-                            child: InkWell(
-                              onTap: _isModelLoading || _isRecording || _isTranscribing 
-                                  ? null 
-                                  : () {
-                                      setState(() {
-                                        _selectedModel = entry.key;
-                                        if (_currentLoadedModel != _selectedModel) {
-                                          _isModelLoaded = false;
-                                          _whisperContextPtr = null;
-                                        }
-                                      });
-                                    },
-                              child: Container(
-                                padding: EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: _selectedModel == entry.key 
-                                      ? Colors.deepPurple.withOpacity(0.1)
-                                      : Colors.grey.withOpacity(0.1),
-                                  border: Border.all(
-                                    color: _selectedModel == entry.key 
-                                        ? Colors.deepPurple 
-                                        : Colors.grey.withOpacity(0.3),
-                                    width: 2,
-                                  ),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Column(
-                                  children: [
-                                                                         Icon(
-                                       entry.key == 'tiny' ? Icons.speed : Icons.analytics,
-                                       color: _selectedModel == entry.key 
-                                           ? Colors.deepPurple 
-                                           : Colors.grey,
-                                     ),
-                                    SizedBox(height: 4),
-                                    Text(
-                                      entry.value,
-                                      textAlign: TextAlign.center,
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: _selectedModel == entry.key 
-                                            ? FontWeight.bold 
-                                            : FontWeight.normal,
-                                        color: _selectedModel == entry.key 
-                                            ? Colors.deepPurple 
-                                            : Colors.grey[600],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                        );
-                      }).toList(),
-                    ),
-                  ],
-                ),
-              ),
+            SizedBox(width: 8),
+            Text('Whisper 語音筆記'),
+          ],
+        ),
+        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        actions: [
+          // 模型選擇 Dropdown
+          Container(
+            margin: EdgeInsets.only(right: 16),
+            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.white.withOpacity(0.3)),
             ),
-            
-            SizedBox(height: 16),
-            
-            // 模型載入按鈕
-            ElevatedButton(
-              onPressed: (_isModelLoading || (_isModelLoaded && _currentLoadedModel == _selectedModel)) 
+            child: DropdownButton<String>(
+              value: _selectedModel,
+              icon: Icon(Icons.arrow_drop_down, color: Colors.white),
+              iconSize: 24,
+              elevation: 16,
+              style: TextStyle(color: Colors.white),
+              underline: Container(),
+              dropdownColor: Colors.deepPurple.shade700,
+              items: _modelOptions.entries.map((entry) {
+                return DropdownMenuItem<String>(
+                  value: entry.key,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        entry.key == 'tiny' ? Icons.speed : Icons.analytics,
+                        color: Colors.white,
+                        size: 16,
+                      ),
+                      SizedBox(width: 8),
+                      Text(
+                        entry.key == 'tiny' ? 'Tiny (快)' : 'Base (準確)',
+                        style: TextStyle(fontSize: 14, color: Colors.white),
+                      ),
+                    ],
+                  ),
+                );
+              }).toList(),
+              onChanged: _isModelLoading || _isRecording || _isTranscribing 
                   ? null 
-                  : _loadModel,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _isModelLoaded && _currentLoadedModel == _selectedModel 
-                    ? Colors.green 
-                    : Colors.orange,
-                padding: EdgeInsets.symmetric(vertical: 12),
-              ),
-              child: Text(
-                _isModelLoading 
-                    ? '載入中...' 
-                    : _isModelLoaded && _currentLoadedModel == _selectedModel
-                      ? '${_modelOptions[_currentLoadedModel]} 已載入 ✓' 
-                      : '載入 ${_modelOptions[_selectedModel]}',
-                style: TextStyle(fontSize: 16),
-              ),
+                  : (String? newValue) async {
+                      if (newValue != null && newValue != _selectedModel) {
+                        setState(() {
+                          _selectedModel = newValue;
+                          _isModelLoaded = false;
+                          _whisperContextPtr = null;
+                        });
+                        // 自動載入新選擇的模型
+                        await _loadModel();
+                      }
+                    },
             ),
-            
-            SizedBox(height: 16),
+          ),
+        ],
+      ),
+              body: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // 模型載入狀態顯示（如果正在載入）
+              if (_isModelLoading)
+                Container(
+                  padding: EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.orange),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.orange,
+                        ),
+                      ),
+                      SizedBox(width: 12),
+                      Text(
+                        '正在載入 ${_modelOptions[_selectedModel]}...',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.orange.shade700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+              if (_isModelLoading) SizedBox(height: 16),
 
             // 錄音狀態顯示
             if (_isRecording)
@@ -562,9 +690,10 @@ class _HomePageState extends State<HomePage> {
 
             SizedBox(height: 16),
 
-            // 錄音控制按鈕
+            // 控制按鈕 - 三個按鈕在同一排
             Row(
               children: [
+                // 開始錄音按鈕
                 Expanded(
                   child: ElevatedButton.icon(
                     onPressed: _isModelLoaded && !_isRecording && !_isTranscribing
@@ -575,28 +704,43 @@ class _HomePageState extends State<HomePage> {
                       padding: EdgeInsets.symmetric(vertical: 12),
                     ),
                     icon: Icon(Icons.mic),
-                    label: Text('開始錄音', style: TextStyle(fontSize: 16)),
+                    label: Text('開始錄音', style: TextStyle(fontSize: 14)),
                   ),
                 ),
-                SizedBox(width: 8),
+                SizedBox(width: 6),
+                // 停止錄音並轉錄按鈕
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed: _isRecording ? _stopRecording : null,
+                    onPressed: _isRecording || (_hasRecording && !_isTranscribing)
+                        ? _isRecording ? _stopRecording : _transcribeAudio
+                        : null,
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.grey,
+                      backgroundColor: _isRecording 
+                          ? Colors.grey 
+                          : _isTranscribing 
+                            ? Colors.orange 
+                            : Colors.blue,
                       padding: EdgeInsets.symmetric(vertical: 12),
                     ),
-                    icon: Icon(Icons.stop),
-                    label: Text('停止錄音', style: TextStyle(fontSize: 16)),
+                    icon: Icon(
+                      _isRecording 
+                          ? Icons.stop 
+                          : _isTranscribing 
+                            ? Icons.hourglass_empty 
+                            : Icons.text_fields
+                    ),
+                    label: Text(
+                      _isRecording 
+                          ? '停止並轉錄' 
+                          : _isTranscribing 
+                            ? '轉錄中...' 
+                            : '重新轉錄',
+                      style: TextStyle(fontSize: 14),
+                    ),
                   ),
                 ),
-              ],
-            ),
-            SizedBox(height: 8),
-
-            // 播放和轉錄按鈕
-            Row(
-              children: [
+                SizedBox(width: 6),
+                // 播放錄音按鈕
                 Expanded(
                   child: ElevatedButton.icon(
                     onPressed: _hasRecording && !_isRecording && !_isTranscribing
@@ -609,24 +753,7 @@ class _HomePageState extends State<HomePage> {
                     icon: Icon(_isPlaying ? Icons.stop : Icons.play_arrow),
                     label: Text(
                       _isPlaying ? '停止播放' : '播放錄音',
-                      style: TextStyle(fontSize: 16),
-                    ),
-                  ),
-                ),
-                SizedBox(width: 8),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: _hasRecording && !_isRecording && !_isTranscribing
-                        ? _transcribeAudio
-                        : null,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blue,
-                      padding: EdgeInsets.symmetric(vertical: 12),
-                    ),
-                    icon: Icon(_isTranscribing ? Icons.hourglass_empty : Icons.text_fields),
-                    label: Text(
-                      _isTranscribing ? '轉錄中...' : '轉錄音頻',
-                      style: TextStyle(fontSize: 16),
+                      style: TextStyle(fontSize: 14),
                     ),
                   ),
                 ),
@@ -634,6 +761,95 @@ class _HomePageState extends State<HomePage> {
             ),
             
             SizedBox(height: 16),
+
+            // 轉錄記錄清單
+            if (_transcriptionRecords.isNotEmpty) ...[
+              Container(
+                height: 200, // 固定高度，可滾動
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey.withOpacity(0.3)),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  children: [
+                    // 清單標題
+                    Container(
+                      width: double.infinity,
+                      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.withOpacity(0.1),
+                        borderRadius: BorderRadius.only(
+                          topLeft: Radius.circular(8),
+                          topRight: Radius.circular(8),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.history, size: 20, color: Colors.grey[600]),
+                          SizedBox(width: 8),
+                          Text(
+                            '轉錄記錄 (${_transcriptionRecords.length})',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.grey[700],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    // 清單內容
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: _transcriptionRecords.length,
+                        itemBuilder: (context, index) {
+                          final record = _transcriptionRecords[index];
+                          return Container(
+                            decoration: BoxDecoration(
+                              border: Border(
+                                bottom: BorderSide(
+                                  color: Colors.grey.withOpacity(0.2),
+                                  width: 0.5,
+                                ),
+                              ),
+                            ),
+                            child: ListTile(
+                              dense: true,
+                              title: Text(
+                                record.text,
+                                style: TextStyle(fontSize: 14),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              subtitle: Text(
+                                '${record.timestamp.month}/${record.timestamp.day} ${record.timestamp.hour.toString().padLeft(2, '0')}:${record.timestamp.minute.toString().padLeft(2, '0')}',
+                                style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                              ),
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  IconButton(
+                                    icon: Icon(Icons.edit, size: 18, color: Colors.blue),
+                                    onPressed: () => _showEditDialog(index),
+                                    tooltip: '編輯',
+                                  ),
+                                  IconButton(
+                                    icon: Icon(Icons.delete, size: 18, color: Colors.red),
+                                    onPressed: () => _showDeleteConfirmDialog(index),
+                                    tooltip: '刪除',
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(height: 16),
+            ],
 
             // 結果顯示區域
             Expanded(
@@ -649,12 +865,26 @@ class _HomePageState extends State<HomePage> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text(
-                          '轉錄結果',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '轉錄結果',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            if (_isModelLoaded && _currentLoadedModel.isNotEmpty)
+                              Text(
+                                '目前模型: ${_modelOptions[_currentLoadedModel]}',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.green.shade700,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                          ],
                         ),
                         if (_hasTranscription)
                           IconButton(
@@ -669,7 +899,9 @@ class _HomePageState extends State<HomePage> {
                       child: SingleChildScrollView(
                         child: Text(
                           _transcriptionResult.isEmpty 
-                            ? '請先選擇模型並載入，然後開始錄音進行語音轉文字...' 
+                            ? _isModelLoaded 
+                              ? '點擊開始錄音按鈕開始語音轉文字...' 
+                              : '正在載入 Whisper 模型，請稍候...'
                             : _transcriptionResult,
                           style: TextStyle(fontSize: 16),
                         ),
