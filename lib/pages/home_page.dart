@@ -14,11 +14,13 @@ class TranscriptionRecord {
   String id;
   String text;
   DateTime timestamp;
+  bool isImportant;
 
   TranscriptionRecord({
     required this.id,
     required this.text,
     required this.timestamp,
+    this.isImportant = false,
   });
 
   Map<String, dynamic> toJson() {
@@ -26,6 +28,7 @@ class TranscriptionRecord {
       'id': id,
       'text': text,
       'timestamp': timestamp.toIso8601String(),
+      'isImportant': isImportant,
     };
   }
 
@@ -34,6 +37,7 @@ class TranscriptionRecord {
       id: json['id'],
       text: json['text'],
       timestamp: DateTime.parse(json['timestamp']),
+      isImportant: json['isImportant'] ?? false,
     );
   }
 }
@@ -56,8 +60,6 @@ class _HomePageState extends State<HomePage> {
   bool _isModelLoaded = false;
   bool _isModelLoading = false;
   bool _isTranscribing = false;
-  bool _hasTranscription = false;
-  String _transcriptionResult = '';
   String _recordingPath = '';
   String _systemInfo = '';
   int? _whisperContextPtr;
@@ -72,9 +74,14 @@ class _HomePageState extends State<HomePage> {
     'base': 'Base 模型 (57MB) - 更準確',
   };
   
-  // 轉錄記錄清單相關變數
+  // 快閃筆記清單相關變數
   List<TranscriptionRecord> _transcriptionRecords = [];
   static const String _recordsKey = 'transcription_records';
+  static const String _selectedModelKey = 'selected_model';
+  
+  // 詳細內容顯示相關變數
+  bool _showDetailView = false;
+  TranscriptionRecord? _selectedRecord;
 
   @override
   void initState() {
@@ -93,7 +100,8 @@ class _HomePageState extends State<HomePage> {
     await _initializeRecording();
     await _getSystemInfo();
     await _loadTranscriptionRecords();
-    // 自動載入預設的Tiny模型
+    await _loadSelectedModel();
+    // 自動載入選定的模型
     await _loadModel();
   }
 
@@ -122,7 +130,6 @@ class _HomePageState extends State<HomePage> {
     
     setState(() {
       _isModelLoading = true;
-      _transcriptionResult = '正在載入${_modelOptions[_selectedModel]}...';
     });
 
     try {
@@ -136,17 +143,9 @@ class _HomePageState extends State<HomePage> {
 
       // 如果模型不存在，從 assets 複製
       if (!await modelFile.exists()) {
-        setState(() {
-          _transcriptionResult = '正在複製${_modelOptions[_selectedModel]}檔案...';
-        });
-        
         await platform.invokeMethod('copyAssetToFile', {
           'assetName': 'models/$modelFileName',
           'targetPath': modelPath,
-        });
-        
-        setState(() {
-          _transcriptionResult = '${_modelOptions[_selectedModel]}檔案複製完成，正在載入...';
         });
       }
 
@@ -160,8 +159,8 @@ class _HomePageState extends State<HomePage> {
           _isModelLoaded = true;
           _whisperContextPtr = contextPtr;
           _currentLoadedModel = _selectedModel;
-          _transcriptionResult = '${_modelOptions[_selectedModel]}載入成功！可以開始錄音了。';
         });
+        _showSuccessSnackBar('${_modelOptions[_selectedModel]}載入成功！');
       } else {
         throw Exception('載入模型失敗：返回的 context pointer 無效');
       }
@@ -169,8 +168,8 @@ class _HomePageState extends State<HomePage> {
       setState(() {
         _isModelLoaded = false;
         _whisperContextPtr = null;
-        _transcriptionResult = '載入模型失敗: $e';
       });
+      _showErrorSnackBar('載入模型失敗: $e');
     } finally {
       setState(() {
         _isModelLoading = false;
@@ -212,7 +211,6 @@ class _HomePageState extends State<HomePage> {
         setState(() {
           _isRecording = true;
           _recordingDuration = Duration.zero;
-          _transcriptionResult = '正在錄音...';
         });
 
         _showSuccessSnackBar('開始錄音...');
@@ -230,7 +228,6 @@ class _HomePageState extends State<HomePage> {
       setState(() {
         _isRecording = false;
         _hasRecording = true;
-        _transcriptionResult = '錄音完成，正在自動轉錄...';
       });
 
       _showSuccessSnackBar('錄音完成！正在自動轉錄...');
@@ -286,9 +283,7 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _transcribeAudio() async {
     if (_recordingPath.isEmpty || _whisperContextPtr == null) {
-      setState(() {
-        _transcriptionResult = '錯誤：沒有可轉錄的錄音檔案或模型未載入';
-      });
+      _showErrorSnackBar('錯誤：沒有可轉錄的錄音檔案或模型未載入');
       return;
     }
 
@@ -296,7 +291,6 @@ class _HomePageState extends State<HomePage> {
 
     setState(() {
       _isTranscribing = true;
-      _transcriptionResult = '正在轉錄音頻...（使用 ${_modelOptions[_currentLoadedModel]} 模型）\n開始時間: ${DateTime.now().toString().substring(11, 19)}';
     });
 
     try {
@@ -316,59 +310,21 @@ class _HomePageState extends State<HomePage> {
       final elapsedMs = stopwatch.elapsedMilliseconds;
       final elapsedSeconds = (elapsedMs / 1000).toStringAsFixed(2);
 
-      setState(() {
-        _transcriptionResult = '''
-🎯 轉錄成功！
-
-📝 結果: $result
-
-⏱️ 性能統計:
-• 總耗時: ${elapsedSeconds}s (${elapsedMs}ms)
-• 速度: ${elapsedMs < 1000 ? '超快' : elapsedMs < 3000 ? '快速' : elapsedMs < 10000 ? '正常' : '較慢'}
-• 完成時間: ${DateTime.now().toString().substring(11, 19)}
-
-📊 音頻資訊:
-• 檔案: ${_recordingPath.split('/').last}
-• 使用模型: ${_modelOptions[_currentLoadedModel]}
-• 執行緒數: 6
-''';
-        _hasTranscription = true;
-      });
-
-      // 自動添加轉錄結果到記錄清單
+      // 自動添加轉錄結果到快閃筆記
       if (result.trim().isNotEmpty) {
         await _addTranscriptionRecord(result.trim());
       }
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('轉錄完成！耗時 ${elapsedSeconds}s'),
-          backgroundColor: Colors.green,
-          duration: Duration(seconds: 2),
-        ),
-      );
+      // 顯示轉錄成功的浮動通知
+      _showTranscriptionSuccessToast(result.trim(), elapsedSeconds);
 
     } catch (e) {
       stopwatch.stop();
       final elapsedMs = stopwatch.elapsedMilliseconds;
       final elapsedSeconds = (elapsedMs / 1000).toStringAsFixed(2);
 
-      setState(() {
-        _transcriptionResult = '''
-❌ 轉錄失敗
-
-🔍 錯誤詳情: $e
-
-⏱️ 失敗前耗時: ${elapsedSeconds}s (${elapsedMs}ms)
-
-💡 建議:
-1. 檢查錄音檔案是否正常
-2. 嘗試重新載入模型
-3. 錄製更短的音頻（3-5秒）
-4. 確保手機性能充足
-''';
-        _hasTranscription = true;
-      });
+      // 轉錄失敗時的錯誤處理
+      print('轉錄失敗: $e (耗時: ${elapsedSeconds}s)');
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -410,14 +366,9 @@ class _HomePageState extends State<HomePage> {
     return '$minutes:$seconds';
   }
 
-  void _copyTranscription() {
-    if (_transcriptionResult.isNotEmpty) {
-      Clipboard.setData(ClipboardData(text: _transcriptionResult));
-      _showSuccessSnackBar('轉錄結果已複製到剪貼簿');
-    }
-  }
 
-  // ============ 轉錄記錄清單相關函數 ============
+
+  // ============ 快閃筆記清單相關函數 ============
   
   Future<void> _loadTranscriptionRecords() async {
     try {
@@ -461,7 +412,6 @@ class _HomePageState extends State<HomePage> {
     });
 
     await _saveTranscriptionRecords();
-    _showSuccessSnackBar('已添加到記錄清單');
   }
 
   Future<void> _editTranscriptionRecord(int index, String newText) async {
@@ -551,6 +501,100 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  // 顯示轉錄成功的浮動通知
+  void _showTranscriptionSuccessToast(String result, String elapsedSeconds) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Container(
+          padding: EdgeInsets.symmetric(vertical: 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.check_circle, color: Colors.white, size: 20),
+                  SizedBox(width: 8),
+                  Text(
+                    '轉錄完成！',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+              SizedBox(height: 4),
+              Text(
+                '內容: $result',
+                style: TextStyle(fontSize: 13),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              SizedBox(height: 2),
+              Text(
+                '耗時: ${elapsedSeconds}s',
+                style: TextStyle(fontSize: 12, color: Colors.white70),
+              ),
+            ],
+          ),
+        ),
+        backgroundColor: Colors.green.shade600,
+        duration: Duration(seconds: 4),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+        ),
+      ),
+    );
+  }
+
+  // 保存和載入模型選擇
+  Future<void> _saveSelectedModel() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_selectedModelKey, _selectedModel);
+    } catch (e) {
+      print('保存模型選擇失敗: $e');
+    }
+  }
+
+  Future<void> _loadSelectedModel() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String? savedModel = prefs.getString(_selectedModelKey);
+      if (savedModel != null && _modelOptions.containsKey(savedModel)) {
+        setState(() {
+          _selectedModel = savedModel;
+        });
+      }
+    } catch (e) {
+      print('載入模型選擇失敗: $e');
+    }
+  }
+
+  // 顯示詳細內容
+  void _showRecordDetail(TranscriptionRecord record) {
+    setState(() {
+      _selectedRecord = record;
+      _showDetailView = true;
+    });
+  }
+
+  // 關閉詳細內容
+  void _closeDetailView() {
+    setState(() {
+      _showDetailView = false;
+      _selectedRecord = null;
+    });
+  }
+
+  // 切換筆記重要性
+  Future<void> _toggleImportance(TranscriptionRecord record) async {
+    setState(() {
+      record.isImportant = !record.isImportant;
+    });
+    await _saveTranscriptionRecords();
+    _showSuccessSnackBar(record.isImportant ? '已標記為重要' : '已取消重要標記');
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -571,37 +615,43 @@ class _HomePageState extends State<HomePage> {
           // 模型選擇 Dropdown
           Container(
             margin: EdgeInsets.only(right: 16),
-            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.1),
+              color: Theme.of(context).colorScheme.inversePrimary,
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.white.withOpacity(0.3)),
+              border: Border.all(color: Colors.grey.withOpacity(0.3), width: 1),
             ),
             child: DropdownButton<String>(
               value: _selectedModel,
-              icon: Icon(Icons.arrow_drop_down, color: Colors.white),
-              iconSize: 24,
-              elevation: 16,
-              style: TextStyle(color: Colors.white),
+              icon: Icon(Icons.keyboard_arrow_down, color: Colors.black, size: 20),
+              iconSize: 20,
+              elevation: 8,
+              style: TextStyle(color: Colors.black, fontWeight: FontWeight.w500),
               underline: Container(),
-              dropdownColor: Colors.deepPurple.shade700,
+              dropdownColor: Theme.of(context).colorScheme.inversePrimary,
               items: _modelOptions.entries.map((entry) {
                 return DropdownMenuItem<String>(
                   value: entry.key,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        entry.key == 'tiny' ? Icons.speed : Icons.analytics,
-                        color: Colors.white,
-                        size: 16,
-                      ),
-                      SizedBox(width: 8),
-                      Text(
-                        entry.key == 'tiny' ? 'Tiny (快)' : 'Base (準確)',
-                        style: TextStyle(fontSize: 14, color: Colors.white),
-                      ),
-                    ],
+                  child: Container(
+                    padding: EdgeInsets.symmetric(vertical: 4),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                            color: entry.key == 'tiny' ? Colors.green : Colors.blue,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        SizedBox(width: 10),
+                        Text(
+                          entry.key == 'tiny' ? 'Tiny (快)' : 'Base (準確)',
+                          style: TextStyle(fontSize: 14, color: Colors.black, fontWeight: FontWeight.w500),
+                        ),
+                      ],
+                    ),
                   ),
                 );
               }).toList(),
@@ -614,6 +664,8 @@ class _HomePageState extends State<HomePage> {
                           _isModelLoaded = false;
                           _whisperContextPtr = null;
                         });
+                        // 保存模型選擇
+                        await _saveSelectedModel();
                         // 自動載入新選擇的模型
                         await _loadModel();
                       }
@@ -704,7 +756,7 @@ class _HomePageState extends State<HomePage> {
                       padding: EdgeInsets.symmetric(vertical: 12),
                     ),
                     icon: Icon(Icons.mic),
-                    label: Text('開始錄音', style: TextStyle(fontSize: 14)),
+                    label: Text('錄製想法', style: TextStyle(fontSize: 14)),
                   ),
                 ),
                 SizedBox(width: 6),
@@ -762,13 +814,18 @@ class _HomePageState extends State<HomePage> {
             
             SizedBox(height: 16),
 
-            // 轉錄記錄清單
+            // 快閃筆記清單 - 核心功能區域！
             if (_transcriptionRecords.isNotEmpty) ...[
               Container(
-                height: 200, // 固定高度，可滾動
+                height: 500, // 加倍高度，給更多空間顯示筆記
                 decoration: BoxDecoration(
-                  border: Border.all(color: Colors.grey.withOpacity(0.3)),
-                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.amber.withOpacity(0.5), width: 2),
+                  borderRadius: BorderRadius.circular(12),
+                  gradient: LinearGradient(
+                    colors: [Colors.amber.withOpacity(0.05), Colors.orange.withOpacity(0.05)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
                 ),
                 child: Column(
                   children: [
@@ -777,22 +834,31 @@ class _HomePageState extends State<HomePage> {
                       width: double.infinity,
                       padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                       decoration: BoxDecoration(
-                        color: Colors.grey.withOpacity(0.1),
+                        gradient: LinearGradient(
+                          colors: [Colors.amber.withOpacity(0.15), Colors.orange.withOpacity(0.15)],
+                        ),
                         borderRadius: BorderRadius.only(
-                          topLeft: Radius.circular(8),
-                          topRight: Radius.circular(8),
+                          topLeft: Radius.circular(10),
+                          topRight: Radius.circular(10),
                         ),
                       ),
                       child: Row(
                         children: [
-                          Icon(Icons.history, size: 20, color: Colors.grey[600]),
-                          SizedBox(width: 8),
                           Text(
-                            '轉錄記錄 (${_transcriptionRecords.length})',
+                            '💡 快閃筆記 (${_transcriptionRecords.length})',
                             style: TextStyle(
-                              fontSize: 16,
+                              fontSize: 18,
                               fontWeight: FontWeight.bold,
-                              color: Colors.grey[700],
+                              color: Colors.amber.shade800,
+                            ),
+                          ),
+                          Spacer(),
+                          Text(
+                            '點擊查看詳情',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.amber.shade600,
+                              fontStyle: FontStyle.italic,
                             ),
                           ),
                         ],
@@ -808,18 +874,52 @@ class _HomePageState extends State<HomePage> {
                             decoration: BoxDecoration(
                               border: Border(
                                 bottom: BorderSide(
-                                  color: Colors.grey.withOpacity(0.2),
+                                  color: Colors.amber.withOpacity(0.2),
                                   width: 0.5,
                                 ),
                               ),
                             ),
                             child: ListTile(
                               dense: true,
-                              title: Text(
-                                record.text,
-                                style: TextStyle(fontSize: 14),
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
+                              onTap: () => _showRecordDetail(record), // 添加點擊事件
+                              leading: Container(
+                                width: 28,
+                                height: 28,
+                                decoration: BoxDecoration(
+                                  color: Colors.amber.shade100,
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: Colors.amber.shade400, width: 1.5),
+                                ),
+                                child: Center(
+                                  child: Text(
+                                    '${index + 1}',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.amber.shade700,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              title: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      record.text,
+                                      style: TextStyle(fontSize: 15, color: Colors.grey.shade800),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  if (record.isImportant) ...[
+                                    SizedBox(width: 8),
+                                    Icon(
+                                      Icons.star,
+                                      size: 20,
+                                      color: Colors.red.shade600,
+                                    ),
+                                  ],
+                                ],
                               ),
                               subtitle: Text(
                                 '${record.timestamp.month}/${record.timestamp.day} ${record.timestamp.hour.toString().padLeft(2, '0')}:${record.timestamp.minute.toString().padLeft(2, '0')}',
@@ -832,11 +932,15 @@ class _HomePageState extends State<HomePage> {
                                     icon: Icon(Icons.edit, size: 18, color: Colors.blue),
                                     onPressed: () => _showEditDialog(index),
                                     tooltip: '編輯',
+                                    padding: EdgeInsets.all(4),
+                                    visualDensity: VisualDensity.compact,
                                   ),
                                   IconButton(
                                     icon: Icon(Icons.delete, size: 18, color: Colors.red),
                                     onPressed: () => _showDeleteConfirmDialog(index),
                                     tooltip: '刪除',
+                                    padding: EdgeInsets.all(4),
+                                    visualDensity: VisualDensity.compact,
                                   ),
                                 ],
                               ),
@@ -851,66 +955,207 @@ class _HomePageState extends State<HomePage> {
               SizedBox(height: 16),
             ],
 
-            // 結果顯示區域
-            Expanded(
-              child: Container(
-                padding: EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.grey.withOpacity(0.3)),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Column(
+            // 詳細內容顯示區域
+            if (_showDetailView && _selectedRecord != null)
+              Expanded(
+                child: Container(
+                  padding: EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.blue.withOpacity(0.3)),
+                    borderRadius: BorderRadius.circular(8),
+                    color: Colors.blue.withOpacity(0.02),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                                              Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Row(
+                              children: [
+                                Text(
+                                  '📄 筆記詳情',
+                                  style: TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.blue.shade700,
+                                  ),
+                                ),
+                                SizedBox(width: 12),
+                                InkWell(
+                                  onTap: () => _toggleImportance(_selectedRecord!),
+                                  borderRadius: BorderRadius.circular(6),
+                                  child: Container(
+                                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      color: _selectedRecord!.isImportant 
+                                          ? Colors.red.shade100 
+                                          : Colors.grey.shade100,
+                                      borderRadius: BorderRadius.circular(6),
+                                      border: Border.all(
+                                        color: _selectedRecord!.isImportant 
+                                            ? Colors.red.shade300 
+                                            : Colors.grey.shade300,
+                                        width: 1,
+                                      ),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          _selectedRecord!.isImportant ? Icons.star : Icons.star_outline,
+                                          size: 16,
+                                          color: _selectedRecord!.isImportant 
+                                              ? Colors.red.shade600 
+                                              : Colors.grey.shade600,
+                                        ),
+                                        SizedBox(width: 4),
+                                        Text(
+                                          _selectedRecord!.isImportant ? '重要' : '標記',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.bold,
+                                            color: _selectedRecord!.isImportant 
+                                                ? Colors.red.shade600 
+                                                : Colors.grey.shade600,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            Row(
+                              children: [
+                                IconButton(
+                                  onPressed: () {
+                                    Clipboard.setData(ClipboardData(text: _selectedRecord!.text));
+                                    _showSuccessSnackBar('已複製到剪貼簿');
+                                  },
+                                  icon: Icon(Icons.copy, color: Colors.grey.shade600),
+                                  tooltip: '複製內容',
+                                ),
+                                IconButton(
+                                  onPressed: _closeDetailView,
+                                  icon: Icon(Icons.close, color: Colors.grey.shade600),
+                                  tooltip: '關閉',
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      Divider(color: Colors.blue.withOpacity(0.3)),
+                      SizedBox(height: 8),
+                      Container(
+                        padding: EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.amber.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.amber.withOpacity(0.3)),
+                        ),
+                        child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              '轉錄結果',
+                              '📝 筆記內容',
                               style: TextStyle(
-                                fontSize: 18,
+                                fontSize: 14,
                                 fontWeight: FontWeight.bold,
+                                color: Colors.amber.shade700,
                               ),
                             ),
-                            if (_isModelLoaded && _currentLoadedModel.isNotEmpty)
-                              Text(
-                                '目前模型: ${_modelOptions[_currentLoadedModel]}',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.green.shade700,
-                                  fontWeight: FontWeight.w500,
-                                ),
+                            SizedBox(height: 8),
+                            Text(
+                              _selectedRecord!.text,
+                              style: TextStyle(
+                                fontSize: 16,
+                                height: 1.5,
+                                color: Colors.grey.shade800,
                               ),
+                            ),
                           ],
                         ),
-                        if (_hasTranscription)
-                          IconButton(
-                            onPressed: _copyTranscription,
-                            icon: Icon(Icons.copy),
-                            tooltip: '複製到剪貼簿',
-                          ),
-                      ],
-                    ),
-                    SizedBox(height: 8),
-                    Expanded(
-                      child: SingleChildScrollView(
-                        child: Text(
-                          _transcriptionResult.isEmpty 
-                            ? _isModelLoaded 
-                              ? '點擊開始錄音按鈕開始語音轉文字...' 
-                              : '正在載入 Whisper 模型，請稍候...'
-                            : _transcriptionResult,
-                          style: TextStyle(fontSize: 16),
+                      ),
+                      SizedBox(height: 12),
+                      Container(
+                        padding: EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.grey.withOpacity(0.05),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '🕐 創建時間',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.grey.shade700,
+                              ),
+                            ),
+                            SizedBox(height: 4),
+                            Text(
+                              '${_selectedRecord!.timestamp.year}/${_selectedRecord!.timestamp.month.toString().padLeft(2, '0')}/${_selectedRecord!.timestamp.day.toString().padLeft(2, '0')} ${_selectedRecord!.timestamp.hour.toString().padLeft(2, '0')}:${_selectedRecord!.timestamp.minute.toString().padLeft(2, '0')}:${_selectedRecord!.timestamp.second.toString().padLeft(2, '0')}',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Colors.grey.shade600,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
-            ),
+
+            // 提示信息（當沒有選中詳細內容時）
+            if (!_showDetailView)
+              Expanded(
+                child: Container(
+                  padding: EdgeInsets.all(24),
+                  child: Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.lightbulb_outline,
+                          size: 48,
+                          color: Colors.grey.shade400,
+                        ),
+                        SizedBox(height: 16),
+                        Text(
+                          _transcriptionRecords.isEmpty
+                              ? _isModelLoaded 
+                                ? '點擊錄製想法來創建你的第一個快閃筆記！' 
+                                : '正在載入 Whisper 模型，請稍候...'
+                              : '點擊上方的快閃筆記來查看詳細內容',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: Colors.grey.shade600,
+                            height: 1.5,
+                          ),
+                        ),
+                        if (_transcriptionRecords.isEmpty && _isModelLoaded) ...[
+                          SizedBox(height: 16),
+                          Text(
+                            '💡 靈感稍縱即逝，用語音快速記錄你的想法！',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.amber.shade600,
+                              fontStyle: FontStyle.italic,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              ),
           ],
         ),
       ),
