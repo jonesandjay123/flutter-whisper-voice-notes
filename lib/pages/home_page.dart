@@ -152,7 +152,7 @@ class _HomePageState extends State<HomePage> {
 
       if (!await modelFile.exists()) {
         await platform.invokeMethod('copyAssetToFile', {
-          'assetName': 'models/$modelFileName',
+          'assetName': 'flutter_assets/assets/models/$modelFileName',
           'targetPath': modelPath,
         });
       }
