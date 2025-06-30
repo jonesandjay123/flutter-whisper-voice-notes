@@ -15,6 +15,7 @@ import java.io.File
 import java.io.FileOutputStream
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import com.jovicheer.whisper_voice_notes.service.WearSyncManagerHolder
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "whisper_voice_notes"
@@ -104,6 +105,10 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        
+        // 初始化 WearSyncManager
+        WearSyncManagerHolder.getInstance(this).initialize(flutterEngine)
+        Log.i(LOG_TAG, "✅ WearSyncManager initialized from MainActivity")
         
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {

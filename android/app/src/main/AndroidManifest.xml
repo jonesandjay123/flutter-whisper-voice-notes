@@ -41,12 +41,13 @@
         </activity>
         <!-- WearOS 通訊服務 -->
         <service
-            android:name="com.jovicheer.whisper_voice_notes.service.PhoneWearCommunicationService"
+            android:name=".service.PhoneWearCommunicationService"
             android:enabled="true"
-            android:exported="false">
+            android:exported="true">
             <intent-filter>
                 <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
                 <action android:name="com.google.android.gms.wearable.DATA_CHANGED" />
+                <data android:scheme="wear" android:host="*" />
             </intent-filter>
         </service>
         
