@@ -55,4 +55,13 @@ flutter {
 
 dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    
+    // WearOS 通訊
+    implementation("com.google.android.gms:play-services-wearable:18.1.0")
+    
+    // JSON 處理
+    implementation("com.google.code.gson:gson:2.10.1")
+    
+    // 協程支援
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3")
 }

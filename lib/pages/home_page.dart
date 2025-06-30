@@ -125,6 +125,7 @@ class _HomePageState extends State<HomePage> {
     await _loadTranscriptionRecords();
     await _loadSelectedModel();
     await _loadModel();
+    _setupWearOSMethodCallHandler();
   }
 
   Future<void> _initializeRecording() async {
@@ -133,6 +134,86 @@ class _HomePageState extends State<HomePage> {
     
     final directory = await getApplicationDocumentsDirectory();
     _recordingPath = '${directory.path}/recording.wav';
+  }
+
+  // ============ WearOS 相關方法 ============
+  
+  void _setupWearOSMethodCallHandler() {
+    platform.setMethodCallHandler((call) async {
+      switch (call.method) {
+        case 'transcribeAudioForWear':
+          return await _handleWearOSTranscription(call.arguments);
+        case 'getNotesForWear':
+          return await _handleGetNotesForWear(call.arguments);
+        default:
+          throw PlatformException(
+            code: 'NotImplemented',
+            message: 'Method ${call.method} not implemented',
+          );
+      }
+    });
+  }
+  
+  Future<String> _handleWearOSTranscription(Map<String, dynamic> arguments) async {
+    try {
+      final String audioPath = arguments['audioPath'];
+      final String recordId = arguments['recordId'];
+      
+      print('處理來自手錶的轉錄請求: $recordId');
+      
+      if (!_isModelLoaded || _whisperContextPtr == null) {
+        throw Exception('模型未載入');
+      }
+      
+      // 使用現有的轉錄方法
+      final String result = await platform.invokeMethod('transcribeAudio', {
+        'contextPtr': _whisperContextPtr,
+        'audioPath': audioPath,
+        'threads': 6,
+      });
+      
+      if (result.trim().isNotEmpty) {
+        // 將轉錄結果添加到本地記錄中
+        await _addTranscriptionRecord(result.trim());
+        print('WearOS 轉錄完成: ${result.trim()}');
+        return result.trim();
+      } else {
+        throw Exception('轉錄結果為空');
+      }
+      
+    } catch (e) {
+      print('WearOS 轉錄失敗: $e');
+      throw Exception('轉錄失敗: $e');
+    }
+  }
+  
+  Future<List<Map<String, dynamic>>> _handleGetNotesForWear(Map<String, dynamic> arguments) async {
+    try {
+      final int lastSyncTimestamp = arguments['lastSyncTimestamp'] ?? 0;
+      final DateTime lastSyncDate = DateTime.fromMillisecondsSinceEpoch(lastSyncTimestamp);
+      
+      // 過濾出指定時間之後的筆記
+      final filteredRecords = _transcriptionRecords.where((record) {
+        return record.timestamp.isAfter(lastSyncDate);
+      }).toList();
+      
+      // 限制數量（手錶存儲有限）
+      final limitedRecords = filteredRecords.take(20).toList();
+      
+      print('返回 ${limitedRecords.length} 條筆記給手錶');
+      
+      // 轉換為 Map 格式
+      return limitedRecords.map((record) => {
+        'id': record.id,
+        'text': record.text,
+        'timestamp': record.timestamp.millisecondsSinceEpoch,
+        'isImportant': record.isImportant,
+      }).toList();
+      
+    } catch (e) {
+      print('獲取筆記失敗: $e');
+      return [];
+    }
   }
 
   // ============ 模型相關方法 ============
@@ -801,11 +882,13 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildNotesListView() {
-    return ListView.builder(
+    return ReorderableListView.builder(
       itemCount: _transcriptionRecords.length,
+      onReorder: _onReorder,
       itemBuilder: (context, index) {
         final record = _transcriptionRecords[index];
         return Container(
+          key: Key(record.id),
           decoration: BoxDecoration(
             border: Border(
               bottom: BorderSide(color: Colors.amber.withOpacity(0.2), width: 0.5),
@@ -856,14 +939,17 @@ class _HomePageState extends State<HomePage> {
                   icon: Icon(Icons.edit, size: AppConstants.iconSize, color: Colors.blue),
                   onPressed: () => _showEditDialog(index),
                   tooltip: '編輯',
-                  padding: EdgeInsets.all(4),
+                  padding: EdgeInsets.zero,
+                  constraints: BoxConstraints(minWidth: 32, minHeight: 32),
                   visualDensity: VisualDensity.compact,
                 ),
+                SizedBox(width: 0),
                 IconButton(
                   icon: Icon(Icons.delete, size: AppConstants.iconSize, color: Colors.red),
                   onPressed: () => _showDeleteConfirmDialog(index),
                   tooltip: '刪除',
-                  padding: EdgeInsets.all(4),
+                  padding: EdgeInsets.zero,
+                  constraints: BoxConstraints(minWidth: 32, minHeight: 32),
                   visualDensity: VisualDensity.compact,
                 ),
               ],
@@ -872,6 +958,19 @@ class _HomePageState extends State<HomePage> {
         );
       },
     );
+  }
+
+  void _onReorder(int oldIndex, int newIndex) {
+    setState(() {
+      if (oldIndex < newIndex) {
+        newIndex -= 1;
+      }
+      
+      final TranscriptionRecord item = _transcriptionRecords.removeAt(oldIndex);
+      _transcriptionRecords.insert(newIndex, item);
+    });
+    
+    _saveTranscriptionRecords();
   }
 
   Widget _buildDetailView() {

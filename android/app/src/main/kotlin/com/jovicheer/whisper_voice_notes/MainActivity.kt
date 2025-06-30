@@ -1,5 +1,6 @@
 package com.jovicheer.whisper_voice_notes
 
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -17,12 +18,42 @@ class MainActivity : FlutterActivity() {
     private val CHANNEL = "whisper_voice_notes"
     private val LOG_TAG = "WhisperVoiceNotes"
 
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        
+        // 強制啟動 WearOS 服務
+        startWearableService()
+    }
+    
+    private fun startWearableService() {
+        try {
+            val intent = Intent(this, com.jovicheer.whisper_voice_notes.service.PhoneWearCommunicationService::class.java)
+            startService(intent)
+            Log.i(LOG_TAG, "✅ WearOS service started manually")
+        } catch (e: Exception) {
+            Log.e(LOG_TAG, "❌ Failed to start WearOS service", e)
+        }
+    }
+
     private fun getOptimalThreadCount(): Int {
         // 簡化的執行緒計算：使用可用處理器數量，最大限制為 8
         return minOf(Runtime.getRuntime().availableProcessors(), 8)
     }
+    
+    private fun getCurrentContextPtr(): Long? {
+        return globalContextPtr
+    }
 
     companion object {
+        // 全域 context pointer，用於 WearOS 服務
+        @Volatile
+        private var globalContextPtr: Long? = null
+        
+        fun setGlobalContextPtr(ptr: Long?) {
+            globalContextPtr = ptr
+        }
+        
+        fun getGlobalContextPtr(): Long? = globalContextPtr
         init {
             Log.d("WhisperVoiceNotes", "Primary ABI: ${Build.SUPPORTED_ABIS[0]}")
             
@@ -96,6 +127,8 @@ class MainActivity : FlutterActivity() {
                         GlobalScope.launch(Dispatchers.Default) {
                             try {
                                 val contextPtr = loadWhisperModel(modelPath)
+                                // 更新全域 context pointer 供 WearOS 使用
+                                setGlobalContextPtr(contextPtr)
                                 withContext(Dispatchers.Main) {
                                     result.success(contextPtr)
                                 }
@@ -133,6 +166,41 @@ class MainActivity : FlutterActivity() {
                     } else {
                         result.error("INVALID_ARGUMENTS", "Missing contextPtr or audioPath", null)
                     }
+                }
+                "transcribeAudioForWear" -> {
+                    val audioPath = call.argument<String>("audioPath")
+                    val recordId = call.argument<String>("recordId")
+                    
+                    if (audioPath != null && recordId != null) {
+                        // 使用現有的轉錄邏輯，但需要載入的 context pointer
+                        val contextPtr = getCurrentContextPtr()
+                        if (contextPtr != null && contextPtr != 0L) {
+                            GlobalScope.launch(Dispatchers.Default) {
+                                try {
+                                    Log.d(LOG_TAG, "WearOS transcription starting for record: $recordId")
+                                    val transcription = transcribeAudio(contextPtr, audioPath, 6)
+                                    withContext(Dispatchers.Main) {
+                                        result.success(transcription)
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e(LOG_TAG, "WearOS transcription failed: $audioPath", e)
+                                    withContext(Dispatchers.Main) {
+                                        result.error("TRANSCRIBE_FAILED", "Failed to transcribe audio: ${e.message}", null)
+                                    }
+                                }
+                            }
+                        } else {
+                            result.error("MODEL_NOT_LOADED", "Whisper model not loaded", null)
+                        }
+                    } else {
+                        result.error("INVALID_ARGUMENTS", "Missing audioPath or recordId", null)
+                    }
+                }
+                "getNotesForWear" -> {
+                    val lastSyncTimestamp = call.argument<Long>("lastSyncTimestamp") ?: 0L
+                    // 這個方法需要從 Flutter 端調用，所以這裡返回 notImplemented
+                    // Flutter 端會處理這個調用
+                    result.notImplemented()
                 }
                 "getSystemInfo" -> {
                     result.success(getSystemInfo())
