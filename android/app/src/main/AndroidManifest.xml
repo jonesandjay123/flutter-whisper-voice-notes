@@ -39,6 +39,10 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- WearOS 能力宣告 -->
+        <meta-data
+            android:name="com.google.android.gms.wearable.capabilities"
+            android:resource="@xml/wear" />
         <!-- WearOS 通訊服務 -->
         <service
             android:name=".service.PhoneWearCommunicationService"
