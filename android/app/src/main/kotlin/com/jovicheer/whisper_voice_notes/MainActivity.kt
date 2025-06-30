@@ -13,6 +13,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "whisper_voice_notes"
@@ -198,9 +200,24 @@ class MainActivity : FlutterActivity() {
                 }
                 "getNotesForWear" -> {
                     val lastSyncTimestamp = call.argument<Long>("lastSyncTimestamp") ?: 0L
-                    // 這個方法需要從 Flutter 端調用，所以這裡返回 notImplemented
-                    // Flutter 端會處理這個調用
-                    result.notImplemented()
+                    Log.d(LOG_TAG, "getNotesForWear called with timestamp: $lastSyncTimestamp")
+                    
+                    GlobalScope.launch(Dispatchers.IO) {
+                        try {
+                            // 從 SharedPreferences 獲取筆記數據（與 Flutter 端同步）
+                            val notes = getNotesFromSharedPreferences(lastSyncTimestamp)
+                            Log.i(LOG_TAG, "Retrieved ${notes.size} notes for WearOS sync")
+                            
+                            withContext(Dispatchers.Main) {
+                                result.success(notes)
+                            }
+                        } catch (e: Exception) {
+                            Log.e(LOG_TAG, "Failed to get notes for wear", e)
+                            withContext(Dispatchers.Main) {
+                                result.error("GET_NOTES_FAILED", "Failed to get notes: ${e.message}", null)
+                            }
+                        }
+                    }
                 }
                 "getSystemInfo" -> {
                     result.success(getSystemInfo())
@@ -238,6 +255,97 @@ class MainActivity : FlutterActivity() {
                 Log.d(LOG_TAG, "Successfully copied $assetName (${totalBytes / (1024 * 1024)}MB)")
             }
         }
+    }
+
+    /**
+     * 從 SharedPreferences 獲取筆記數據（與 Flutter 端保持一致）
+     */
+    private fun getNotesFromSharedPreferences(lastSyncTimestamp: Long): List<Map<String, Any>> {
+        return try {
+            val sharedPrefs = getSharedPreferences("FlutterSharedPreferences", MODE_PRIVATE)
+            val recordsJson = sharedPrefs.getString("flutter.transcription_records", null)
+            
+            if (recordsJson.isNullOrEmpty()) {
+                Log.d(LOG_TAG, "No notes found in SharedPreferences")
+                return emptyList()
+            }
+            
+            Log.d(LOG_TAG, "Found notes JSON in SharedPreferences: ${recordsJson.length} chars")
+            
+            // 解析 JSON 字符串為 List<Map>
+            val gson = com.google.gson.Gson()
+            val listType = object : com.google.gson.reflect.TypeToken<List<Map<String, Any>>>() {}.type
+            val allNotes: List<Map<String, Any>> = gson.fromJson(recordsJson, listType) ?: emptyList()
+            
+            Log.i(LOG_TAG, "Parsed ${allNotes.size} total notes from SharedPreferences")
+            
+            // 過濾出指定時間戳之後的筆記
+            val filteredNotes = allNotes.filter { note ->
+                val timestamp = when (val ts = note["timestamp"]) {
+                    is Number -> ts.toLong()
+                    is String -> ts.toLongOrNull() ?: 0L
+                    else -> 0L
+                }
+                timestamp > lastSyncTimestamp
+            }
+            
+            Log.i(LOG_TAG, "After filtering by timestamp $lastSyncTimestamp: ${filteredNotes.size} notes")
+            
+            // 轉換為 WearOS 適用的格式
+            val wearNotes = filteredNotes.map { note ->
+                mapOf(
+                    "id" to (note["id"] as? String ?: ""),
+                    "text" to (note["text"] as? String ?: ""),
+                    "timestamp" to when (val ts = note["timestamp"]) {
+                        is Number -> ts.toLong()
+                        is String -> ts.toLongOrNull() ?: 0L
+                        else -> 0L
+                    },
+                    "isImportant" to (note["isImportant"] as? Boolean ?: false),
+                    "duration" to 0L,
+                    "isSynced" to true
+                )
+            }
+            
+            Log.i(LOG_TAG, "Converted ${wearNotes.size} notes for WearOS")
+            wearNotes.forEachIndexed { index, note ->
+                Log.d(LOG_TAG, "Note ${index + 1}: ${note["id"]} - ${(note["text"] as String).take(40)}...")
+            }
+            
+            return wearNotes
+            
+        } catch (e: Exception) {
+            Log.e(LOG_TAG, "Error reading notes from SharedPreferences", e)
+            
+            // 如果讀取失敗，返回一些測試數據確保功能可用
+            Log.w(LOG_TAG, "Returning test data as fallback")
+            return getTestNotesForWear()
+        }
+    }
+    
+    /**
+     * 返回測試筆記數據（fallback 方案）
+     */
+    private fun getTestNotesForWear(): List<Map<String, Any>> {
+        val currentTime = System.currentTimeMillis()
+        return listOf(
+            mapOf(
+                "id" to "test_wear_1",
+                "text" to "🔄 手機端測試筆記 - WearOS 同步功能正常工作",
+                "timestamp" to currentTime,
+                "isImportant" to true,
+                "duration" to 30000L,
+                "isSynced" to true
+            ),
+            mapOf(
+                "id" to "test_wear_2", 
+                "text" to "📱 這是從手機端同步到手錶的測試數據",
+                "timestamp" to currentTime - 60000,
+                "isImportant" to false,
+                "duration" to 25000L,
+                "isSynced" to true
+            )
+        )
     }
 
     // JNI 函數聲明

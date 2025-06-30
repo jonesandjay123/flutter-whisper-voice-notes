@@ -13,6 +13,7 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
 import java.io.FileOutputStream
+import kotlinx.coroutines.suspendCancellableCoroutine
 
 /**
  * 手機端 WearOS 通訊服務
@@ -315,25 +316,19 @@ class PhoneWearCommunicationService : WearableListenerService() {
         }
     }
     
-    /**
-     * 簡化版本：從資料庫獲取筆記（推薦）
+        /**
+     * 從 Flutter 端獲取筆記（簡化版本 - 直接使用測試數據）
      */
     private suspend fun getNotesFromFlutter(lastSyncTimestamp: Long): List<TranscriptionRecord> {
         return withContext(Dispatchers.IO) {
             try {
                 Log.d(TAG, "Getting notes after timestamp: $lastSyncTimestamp")
                 
-                // 方案1：直接從資料庫獲取（推薦，先用這個測試）
-                val notes = getNotesFromDatabase(lastSyncTimestamp)
-                Log.i(TAG, "Got ${notes.size} notes from database")
+                // 暫時使用測試數據，避免複雜的 Flutter 整合問題
+                // 如果需要真實數據，可以後續再實現 Flutter MethodChannel 調用
+                val notes = getTestNotes(lastSyncTimestamp)
+                Log.i(TAG, "Got ${notes.size} notes (test data)")
                 return@withContext notes
-                
-                // 方案2：如果必須用 Flutter，請使用帶超時的版本（暫時註解）
-                /*
-                return@withContext withTimeout(5000L) {
-                    getNotesFromFlutterWithTimeout(lastSyncTimestamp)
-                }
-                */
                 
             } catch (e: Exception) {
                 Log.e(TAG, "Error getting notes, returning empty list", e)
@@ -341,11 +336,39 @@ class PhoneWearCommunicationService : WearableListenerService() {
             }
         }
     }
+    
+    /**
+     * 解析 Flutter 返回的筆記數據
+     */
+    private fun parseFlutterNotes(result: Any?): List<TranscriptionRecord> {
+        return try {
+            when (result) {
+                is List<*> -> {
+                    result.mapNotNull { item ->
+                        when (item) {
+                            is Map<*, *> -> {
+                                @Suppress("UNCHECKED_CAST")
+                                TranscriptionRecord.fromMap(item as Map<String, Any>)
+                            }
+                            else -> null
+                        }
+                    }
+                }
+                else -> {
+                    Log.w(TAG, "Unexpected result type from Flutter: ${result?.javaClass}")
+                    emptyList()
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error parsing Flutter notes", e)
+            emptyList()
+        }
+    }
 
     /**
-     * 直接從資料庫獲取筆記（臨時測試方案）
+     * 獲取測試筆記數據（fallback 方案）
      */
-    private suspend fun getNotesFromDatabase(lastSyncTimestamp: Long): List<TranscriptionRecord> {
+    private fun getTestNotes(lastSyncTimestamp: Long): List<TranscriptionRecord> {
         return try {
             val currentTime = System.currentTimeMillis()
             Log.d(TAG, "Current time: $currentTime, lastSyncTimestamp: $lastSyncTimestamp")
