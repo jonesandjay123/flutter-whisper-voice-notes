@@ -111,11 +111,18 @@ class MainActivity : FlutterActivity() {
 
     private fun getNotesJsonFromSharedPreferences(): String {
         val sharedPreferences: SharedPreferences = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
-        val notesJson = sharedPreferences.getString("notes", null)
+        
+        // 使用正確的 key - Flutter 端使用 'transcription_records'
+        val notesJson = sharedPreferences.getString("flutter.transcription_records", null)
         if (notesJson != null) return notesJson
 
+        // 嘗試不帶前綴的key
+        val directNotesJson = sharedPreferences.getString("transcription_records", null)
+        if (directNotesJson != null) return directNotesJson
+
+        // Fallback
         val legacyNotesJson = sharedPreferences.all.entries
-            .firstOrNull { it.key.startsWith("flutter.notes_") }
+            .firstOrNull { it.key.contains("transcription_records") }
             ?.value as? String
         if (legacyNotesJson != null) return legacyNotesJson
         

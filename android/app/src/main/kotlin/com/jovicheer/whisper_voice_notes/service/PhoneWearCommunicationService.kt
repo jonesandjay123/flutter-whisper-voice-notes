@@ -52,20 +52,33 @@ class PhoneWearCommunicationService : WearableListenerService() {
         Log.d(LOG_TAG, "getNotesJsonFromSharedPreferences: Attempting to get notes.")
         try {
             val sharedPreferences: SharedPreferences = applicationContext.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
-            val notesJson = sharedPreferences.getString("notes", null)
+            
+            // 先列出所有可用的keys以便除錯
+            val allKeys = sharedPreferences.all.keys
+            Log.d(LOG_TAG, "所有可用的SharedPreferences keys: $allKeys")
+            
+            // 使用正確的 key - Flutter 端使用 'transcription_records'
+            val notesJson = sharedPreferences.getString("flutter.transcription_records", null)
             
             if (notesJson != null) {
-                Log.d(LOG_TAG, "getNotesJsonFromSharedPreferences: Successfully retrieved JSON string.")
+                Log.d(LOG_TAG, "getNotesJsonFromSharedPreferences: Successfully retrieved JSON string from flutter.transcription_records")
                 return notesJson
+            }
+            
+            // 嘗試不帶前綴的key
+            val directNotesJson = sharedPreferences.getString("transcription_records", null)
+            if (directNotesJson != null) {
+                Log.d(LOG_TAG, "getNotesJsonFromSharedPreferences: Found direct key transcription_records.")
+                return directNotesJson
             }
             
             // Fallback for very old key format
             val legacyNotesJson = sharedPreferences.all.entries
-                .firstOrNull { it.key.startsWith("flutter.notes_") }
+                .firstOrNull { it.key.contains("transcription_records") }
                 ?.value as? String
             
             if (legacyNotesJson != null) {
-                Log.d(LOG_TAG, "getNotesJsonFromSharedPreferences: Found legacy notes key.")
+                Log.d(LOG_TAG, "getNotesJsonFromSharedPreferences: Found legacy notes key containing transcription_records.")
                 return legacyNotesJson
             }
             
