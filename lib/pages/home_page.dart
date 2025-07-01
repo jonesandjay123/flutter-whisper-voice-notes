@@ -123,6 +123,13 @@ class _HomePageState extends State<HomePage> {
   Future<void> _initializeApp() async {
     await _initializeRecording();
     await _loadTranscriptionRecords();
+    
+    // 如果沒有任何記錄，添加一些測試數據
+    if (_transcriptionRecords.isEmpty) {
+      print('沒有找到現有記錄，添加測試數據...');
+      await _addTestData();
+    }
+    
     await _loadSelectedModel();
     await _loadModel();
     _setupWearOSMethodCallHandler();
@@ -134,6 +141,36 @@ class _HomePageState extends State<HomePage> {
     
     final directory = await getApplicationDocumentsDirectory();
     _recordingPath = '${directory.path}/recording.wav';
+  }
+
+  Future<void> _addTestData() async {
+    final testRecords = [
+      TranscriptionRecord(
+        id: '1',
+        text: '這是第一條測試筆記，用來測試手錶同步功能。',
+        timestamp: DateTime.now().subtract(Duration(hours: 2)),
+        isImportant: true,
+      ),
+      TranscriptionRecord(
+        id: '2', 
+        text: '第二條筆記：今天要買牛奶和麵包。',
+        timestamp: DateTime.now().subtract(Duration(hours: 1)),
+        isImportant: false,
+      ),
+      TranscriptionRecord(
+        id: '3',
+        text: '重要提醒：明天下午3點開會。',
+        timestamp: DateTime.now().subtract(Duration(minutes: 30)),
+        isImportant: true,
+      ),
+    ];
+    
+    setState(() {
+      _transcriptionRecords.addAll(testRecords);
+    });
+    
+    await _saveTranscriptionRecords();
+    print('已添加 ${testRecords.length} 條測試數據');
   }
 
   // ============ WearOS 相關方法 ============

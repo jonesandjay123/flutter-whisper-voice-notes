@@ -28,6 +28,7 @@ class PhoneWearCommunicationService : WearableListenerService() {
         Log.d(LOG_TAG, "=== Message received ===")
         Log.d(LOG_TAG, "Path: ${messageEvent.path}")
         Log.d(LOG_TAG, "Source: ${messageEvent.sourceNodeId}")
+        Log.d(LOG_TAG, "Data: ${String(messageEvent.data, Charsets.UTF_8)}")
         
         if (messageEvent.path == NOTES_SYNC_REQUEST_PATH) {
             Log.i(LOG_TAG, "Processing NOTES_SYNC_REQUEST...")
@@ -38,6 +39,8 @@ class PhoneWearCommunicationService : WearableListenerService() {
                     Log.e(LOG_TAG, "Failed to handle sync request and send response", e)
                 }
             }
+        } else {
+            Log.w(LOG_TAG, "Unknown message path: ${messageEvent.path}")
         }
     }
     
@@ -57,11 +60,18 @@ class PhoneWearCommunicationService : WearableListenerService() {
             val allKeys = sharedPreferences.all.keys
             Log.d(LOG_TAG, "所有可用的SharedPreferences keys: $allKeys")
             
+            // 詳細檢查每個key的值
+            allKeys.forEach { key ->
+                val value = sharedPreferences.all[key]
+                Log.d(LOG_TAG, "Key: $key, Value type: ${value?.javaClass?.simpleName}, Value: $value")
+            }
+            
             // 使用正確的 key - Flutter 端使用 'transcription_records'
-            val notesJson = sharedPreferences.getString("flutter.transcription_records", null)
+            val notesJson = sharedPreferences.getString("transcription_records", null)
             
             if (notesJson != null) {
                 Log.d(LOG_TAG, "getNotesJsonFromSharedPreferences: Successfully retrieved JSON string from flutter.transcription_records")
+                Log.d(LOG_TAG, "JSON content: $notesJson")
                 return notesJson
             }
             
@@ -69,6 +79,7 @@ class PhoneWearCommunicationService : WearableListenerService() {
             val directNotesJson = sharedPreferences.getString("transcription_records", null)
             if (directNotesJson != null) {
                 Log.d(LOG_TAG, "getNotesJsonFromSharedPreferences: Found direct key transcription_records.")
+                Log.d(LOG_TAG, "JSON content: $directNotesJson")
                 return directNotesJson
             }
             
@@ -79,6 +90,7 @@ class PhoneWearCommunicationService : WearableListenerService() {
             
             if (legacyNotesJson != null) {
                 Log.d(LOG_TAG, "getNotesJsonFromSharedPreferences: Found legacy notes key containing transcription_records.")
+                Log.d(LOG_TAG, "JSON content: $legacyNotesJson")
                 return legacyNotesJson
             }
             
